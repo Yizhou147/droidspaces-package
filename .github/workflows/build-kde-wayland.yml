@@ -182,6 +182,9 @@ jobs:
             echo "archive_target=$archive_target"
           } >> "$GITHUB_OUTPUT"
 
+      - name: 检出仓库（获取额外补丁，如 pc-keyd 的 VKB 补丁）
+        uses: actions/checkout@v5
+
       - name: 在对应的发行版中构建软件包
         env:
           DISTRO_IMAGE: ${{ steps.target.outputs.image }}
@@ -204,6 +207,7 @@ jobs:
             -e PKG_PATTERN \
             -v "$PWD/$OUTPUT_DIR:/root/kde-packages" \
             -v "$PWD/$OUTPUT_DIR:/tmp/kde-packages" \
+            -v "$PWD/patches:/tmp/extra-patches:ro" \
             "$DISTRO_IMAGE" \
             bash -s <<'ANLAND_BUILD'
               set -euo pipefail
@@ -292,6 +296,25 @@ jobs:
               if [ "$BUILD_TARGET" = Debian13 ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then
                 sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/debian.sources
                 apt-get update
+              fi
+
+              # pc-keyd 额外补丁（本仓库 patches/ 下 kwin-*.patch）：
+              # 追加到该发行版 build.sh 将应用的 kwin.patch 末尾。
+              # build.sh 用 `patch -p1 --forward` 应用，追加顺序=应用顺序；
+              # pc-keyd 补丁只改 src/inputmethod.*（anland 补丁改的是别的区域，无上下文冲突）。
+              # 目前仅 ubuntu2604 启用（该补丁针对 kwin 6.6.6 上下文生成）。
+              if [ "$BUILD_TARGET" = ubuntu2604 ] && [ -d /tmp/extra-patches ]; then
+                bs_dir="/tmp/anland/$(dirname "$BUILD_SCRIPT")"
+                target_patch="$(find "$bs_dir" -maxdepth 1 -name 'kwin.patch' | head -1)"
+                if [ -z "$target_patch" ]; then
+                  echo "找不到 $bs_dir/kwin.patch，无法追加额外补丁" >&2
+                  exit 1
+                fi
+                for p in /tmp/extra-patches/kwin-*.patch; do
+                  [ -f "$p" ] || continue
+                  cat "$p" >> "$target_patch"
+                  echo "appended extra patch: $p -> $target_patch"
+                done
               fi
 
               test -f "/tmp/anland/$BUILD_SCRIPT"
